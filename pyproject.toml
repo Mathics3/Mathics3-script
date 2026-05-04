@@ -59,6 +59,7 @@ full = [
 
 [project.scripts]
  mathicsscript = "mathicsscript.__main__:main"
+ mathics3-script = "mathicsscript.__main__:main"
 "fake_psviewer.py" = "mathicsscript.fake_psviewer:main"
 
 [project.urls]
