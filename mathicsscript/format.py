@@ -9,11 +9,11 @@ from typing import Callable
 
 import networkx as nx
 from mathics.core.atoms import String
+from mathics.core.evaluation import Evaluation
 from mathics.core.expression import BoxError, Expression
 from mathics.core.symbols import Symbol
 from mathics.core.systemsymbols import (
     SymbolAborted,
-    SymbolExport,
     SymbolExportString,
     SymbolFailed,
     SymbolFullForm,
@@ -36,7 +36,7 @@ PyMathicsGraph = Symbol("Pymathics`Graph")
 try:
     from matplotlib import __version__ as matplotlib_version
 except ImportError:
-    matplotlib_version = None
+    matplotlib_version = "??"
 
 try:
     import matplotlib.pyplot as plt
@@ -63,7 +63,7 @@ else:
     asymptote_graph.size(200)
 
 
-def format_output(obj, expr, format=None):
+def format_output(evaluation: Evaluation, expr, format=None):
     """
     Handle unformatted output using the *specific* capabilities of mathicsscript
 
@@ -71,26 +71,26 @@ def format_output(obj, expr, format=None):
     it can't make use of a front-ends specific capabilities.
     """
 
-    def eval_boxed(result, fn: Callable, obj, **options):
+    def eval_boxed(result, fn: Callable, evaluation, **options):
         try:
-            boxed = fn(evaluation=obj, **options)
+            boxed = fn(evaluation=evaluation, **options)
         except BoxError:
             boxed = None
-            if not hasattr(obj, "seen_box_error"):
-                obj.seen_box_error = True
-                obj.message(
+            if not hasattr(evaluation, "seen_box_error"):
+                evaluation.seen_box_error = True
+                evaluation.message(
                     "General",
                     "notboxes",
-                    Expression(SymbolFullForm, result).evaluate(obj),
+                    Expression(SymbolFullForm, result).evaluate(evaluation),
                 )
 
         return boxed
 
     if format is None:
-        format = obj.format
+        format = evaluation.format
 
     if isinstance(format, dict):
-        return dict((k, obj.format_output(expr, f)) for k, f in format.items())
+        return dict((k, evaluation.format_output(expr, f)) for k, f in format.items())
 
     expr_type = expr.get_head_name()
     expr_head = expr.get_head()
@@ -106,17 +106,17 @@ def format_output(obj, expr, format=None):
         if len(elements) == 1:
             expr = elements[0]
         render_TeXForm = get_settings_value(
-            obj.definitions, "Settings`$UseMatplotlib"
-        ) and get_settings_value(obj.definitions, "Settings`$RenderTeXForm")
+            evaluation.definitions, "Settings`$UseMatplotlib"
+        ) and get_settings_value(evaluation.definitions, "Settings`$RenderTeXForm")
         if render_TeXForm:
-            boxed = format_element(expr, obj, SymbolTeXForm)
+            boxed = format_element(expr, evaluation, SymbolTeXForm)
             if hasattr(boxed, "head") and boxed.head is SymbolInterpretationBox:
                 inner_box = boxed.elements[0]
                 box_str_sans_quotes = inner_box.value[1:-1]
                 box_str_display_math = rf"${box_str_sans_quotes}$"
                 try:
                     # Create a figure and axis with no visible borders
-                    fig, ax = plt.subplots(figsize=(3, 2))
+                    _, ax = plt.subplots(figsize=(3, 2))
                     ax.axis("off")
                     # Render the LaTeX string in the center
                     # 'transform=ax.transAxes' ensures 0.5 is the exact middle of the window
@@ -136,34 +136,26 @@ def format_output(obj, expr, format=None):
 
     elif (
         expr_head is SymbolImage
-        and get_settings_value(obj.definitions, "Settings`$UseMatplotlib")
+        and get_settings_value(evaluation.definitions, "Settings`$UseMatplotlib")
         and plt
+        and mpimg
     ):
-        temp_png = NamedTemporaryFile(
-            mode="w+b", suffix=".png", prefix="mathicsscript-"
-        )
         try:
-            png_expr = Expression(
-                SymbolExport, String(temp_png.name), expr, String("PNG")
-            )
-            png_expr.evaluate(obj)
-            plt.axes().set_axis_off()
-            img = mpimg.imread(temp_png)
             cmap = "gray" if expr.color_space == "Grayscale" else None
-            plt.imshow(img, cmap=cmap)
+            plt.axes().set_axis_off()
+            plt.imshow(expr.pillow, cmap=cmap)
             plt.show()
         except:  # noqa
             pass
-        temp_png.close()
 
     elif (
         expr_head in (SymbolGraphics, SymbolPlot)
-        and get_settings_value(obj.definitions, "Settings`$UseMatplotlib")
+        and get_settings_value(evaluation.definitions, "Settings`$UseMatplotlib")
         and plt
         and svg2png
     ):
         svg_expr = Expression(SymbolExportString, expr, String("SVG"))
-        svg_str = svg_expr.evaluate(obj).to_python(string_quotes=False)
+        svg_str = svg_expr.evaluate(evaluation).to_python(string_quotes=False)
         temp_png = NamedTemporaryFile(
             mode="w+b", suffix=".png", prefix="mathicsscript-"
         )
@@ -180,10 +172,10 @@ def format_output(obj, expr, format=None):
     elif (
         expr_head in (SymbolGraphics, SymbolPlot, SymbolGraphics3D)
         and have_asymptote
-        and get_settings_value(obj.definitions, "Settings`$UseAsymptote")
+        and get_settings_value(evaluation.definitions, "Settings`$UseAsymptote")
     ):
         asy_expr = Expression(SymbolExportString, expr, String("asy"))
-        asy_str = asy_expr.evaluate(obj).to_python(string_quotes=False)
+        asy_str = asy_expr.evaluate(evaluation).to_python(string_quotes=False)
 
         # Alternate older version
         # asymptote_graph.erase()
@@ -193,42 +185,46 @@ def format_output(obj, expr, format=None):
         return expr_type
 
     if expr is SymbolAborted:
-        obj.out = ["$Aborted"]
-        obj.last_eval = SymbolAborted
+        evaluation.out = ["$Aborted"]
+        evaluation.last_eval = SymbolAborted
         return "$Aborted"
     elif expr is SymbolFailed:
-        obj.out = ["$Failed"]
-        obj.last_eval = SymbolFailed
+        evaluation.out = ["$Failed"]
+        evaluation.last_eval = SymbolFailed
         return "$Failed"
     if format == "text":
         if isinstance(expr, String):
             return expr.value
-        result = expr.format(obj, SymbolOutputForm)
+        result = expr.format(evaluation, SymbolOutputForm)
     elif format == "xml":
-        result = Expression(SymbolStandardForm, expr).format(obj, SymbolMathMLForm)
+        result = Expression(SymbolStandardForm, expr).format(
+            evaluation, SymbolMathMLForm
+        )
     elif format == "tex":
-        result = Expression(SymbolStandardForm, expr).format(obj, SymbolTeXForm)
+        result = Expression(SymbolStandardForm, expr).format(evaluation, SymbolTeXForm)
     elif format == "error":
         # We may do fancier things in the future.
         if isinstance(expr, String):
             return expr.value
-        result = expr.format(obj, SymbolOutputForm)
+        result = expr.format(evaluation, SymbolOutputForm)
     elif format == "unformatted":
         if expr_head is PyMathicsGraph and hasattr(expr, "G"):
             return format_graph(expr.G)
         else:
-            result = expr.format(obj, SymbolOutputForm)
+            result = expr.format(evaluation, SymbolOutputForm)
     else:
         raise ValueError
 
     try:
-        boxes = result.to_text(evaluation=obj)
+        boxes = result.to_text(evaluation=evaluation)
     except BoxError:
         boxes = None
-        if not hasattr(obj, "seen_box_error"):
-            obj.seen_box_error = True
-            obj.message(
-                "General", "notboxes", Expression(SymbolFullForm, result).evaluate(obj)
+        if not hasattr(evaluation, "seen_box_error"):
+            evaluation.seen_box_error = True
+            evaluation.message(
+                "General",
+                "notboxes",
+                Expression(SymbolFullForm, result).evaluate(evaluation),
             )
     return boxes
 
