@@ -140,13 +140,14 @@ def format_output(evaluation: Evaluation, expr, format=None):
         and plt
         and mpimg
     ):
-        try:
+        if hasattr(expr, "pil") and not hasattr(expr, "pillow"):
+            expr.pillow = expr.pil()
+
+        if hasattr(expr, "pillow"):
             cmap = "gray" if expr.color_space == "Grayscale" else None
             plt.axes().set_axis_off()
             plt.imshow(expr.pillow, cmap=cmap)
             plt.show()
-        except:  # noqa
-            pass
 
     elif (
         expr_head in (SymbolGraphics, SymbolPlot)
